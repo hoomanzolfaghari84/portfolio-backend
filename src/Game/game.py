@@ -49,14 +49,14 @@ class Player(Entity):
 class Obstacle(Entity):
     def __init__(self, entity_id, x, y, width, height):
         super().__init__(entity_id)
-        self.add_component(Kinematics(x, y, 0, 0, 0))  # Static
+        self.add_component(Kinematics(x, y, 0, 0, 0))
         self.width = width
         self.height = height
 
 class Bullet(Entity):
     def __init__(self, entity_id, x, y, vx, vy):
         super().__init__(entity_id)
-        self.add_component(Kinematics(x, y, vx, vy, 10))  # Bullet speed
+        self.add_component(Kinematics(x, y, vx, vy, 10))
 
 # --- Systems ---
 class KinematicsSystem:
@@ -64,7 +64,11 @@ class KinematicsSystem:
         self.arena_size = arena_size
 
     def update(self, entities):
-        for eid, entity in list(entities.items()):
+        to_remove = []  # Collect entities to delete
+        entity_list = list(entities.items())  # Snapshot for outer loop
+        obstacle_list = [e for e in entity_list if isinstance(e[1], Obstacle)]  # Snapshot for obstacles
+
+        for eid, entity in entity_list:
             kin = entity.get_component("Kinematics")
             if not kin:
                 continue
@@ -74,28 +78,35 @@ class KinematicsSystem:
             kin.y = max(0, min(kin.y, self.arena_size - 20))
 
             if isinstance(entity, (Player, Bullet)):
-                for oid, obstacle in entities.items():
-                    if oid != eid and isinstance(obstacle, Obstacle):
+                for oid, obstacle in obstacle_list:
+                    if oid != eid:
                         o_kin = obstacle.get_component("Kinematics")
                         if (kin.x < o_kin.x + obstacle.width and
                             kin.x + 20 > o_kin.x and
                             kin.y < o_kin.y + obstacle.height and
                             kin.y + 20 > o_kin.y):
                             if isinstance(entity, Bullet):
-                                del entities[eid]
+                                to_remove.append(eid)
                             elif isinstance(entity, Player):
                                 kin.x -= kin.vx
                                 kin.y -= kin.vy
                                 kin.vx = 0
                                 kin.vy = 0
 
+        # Remove entities after iteration
+        for eid in to_remove:
+            entities.pop(eid, None)
+
 class CombatSystem:
     def update(self, entities, current_time):
-        for bid, bullet in list(entities.items()):
+        to_remove = []  # Collect bullets to delete
+        entity_list = list(entities.items())  # Snapshot for iteration
+
+        for bid, bullet in entity_list:
             if not isinstance(bullet, Bullet):
                 continue
             b_kin = bullet.get_component("Kinematics")
-            for pid, player in entities.items():
+            for pid, player in entity_list:
                 if isinstance(player, Player) and pid != bullet.id:
                     p_kin = player.get_component("Kinematics")
                     p_health = player.get_component("Health")
@@ -105,8 +116,12 @@ class CombatSystem:
                             p_armor.value -= 1
                         else:
                             p_health.hp -= 1
-                        del entities[bid]
+                        to_remove.append(bid)
                         break
+
+        # Remove bullets after iteration
+        for bid in to_remove:
+            entities.pop(bid, None)
 
 class ActionSystem:
     def __init__(self, arena_size):
@@ -148,20 +163,17 @@ class GameEngine:
         self.entities = {}
         self.players = set()
         self.is_running = False
-        self.tick_rate = 1 / 60  # 60 FPS
+        self.tick_rate = 1 / 60
         self.kinematics = KinematicsSystem(self.arena_size)
         self.combat = CombatSystem()
         self.action = ActionSystem(self.arena_size)
 
     def start(self, player1_id, player2_id):
-        """Start the game with two player IDs."""
         self.players = {player1_id, player2_id}
         self.entities.clear()
         self.is_running = True
-        # Add players
         self.entities[player1_id] = Player(player1_id, 50, 150)
         self.entities[player2_id] = Player(player2_id, 350, 150)
-        # Add random obstacles
         for i in range(5):
             x = random.randint(50, 350)
             y = random.randint(50, 350)
@@ -170,13 +182,11 @@ class GameEngine:
             self.entities[f"obs_{i}"] = Obstacle(f"obs_{i}", x, y, w, h)
 
     def end(self):
-        """End the game."""
         self.is_running = False
         self.players.clear()
         self.entities.clear()
 
     def update(self):
-        """Update game state for one tick."""
         if not self.is_running:
             return
         current_time = time.time()
@@ -184,13 +194,11 @@ class GameEngine:
         self.combat.update(self.entities, current_time)
 
     def process_input(self, player_id, action):
-        """Process an input action from a player."""
         if player_id not in self.players or not self.is_running:
             return
         self.action.process(self.entities, player_id, action, time.time())
 
     def get_state(self):
-        """Return current game state for UI/network."""
         state = {
             "entities": {},
             "game_over": any(e.get_component("Health").hp <= 0
@@ -215,6 +223,5 @@ class GameEngine:
         return state
 
     def is_game_over(self):
-        """Check if the game is over."""
         return any(e.get_component("Health").hp <= 0
                   for e in self.entities.values() if isinstance(e, Player))
